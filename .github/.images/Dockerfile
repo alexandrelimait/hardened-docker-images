@@ -1,4 +1,4 @@
-ARG BASE_IMAGE
+ARG BASE_IMAGE=
 FROM ${BASE_IMAGE}
 
 # Make a pipe fail on the first failure
