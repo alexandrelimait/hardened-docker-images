@@ -1,0 +1,79 @@
+# Must specify BASE_IMAGE build-arg (e.g., python:3.11-alpine, python:3.12-alpine, python:3.13-alpine)
+# Note: BASE_IMAGE should be a fully qualified image with tag (e.g., python:3.11.7-alpine3.18)
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Make a pipe fail on the first failure
+SHELL ["/bin/sh", "-o", "pipefail", "-c"]
+
+# ensure we only use apk repositories over HTTPS (altough APK contain an embedded signature)
+RUN echo "https://alpine.global.ssl.fastly.net/alpine/v$(cut -d . -f 1,2 < /etc/alpine-release)/main" > /etc/apk/repositories \
+    && echo "https://alpine.global.ssl.fastly.net/alpine/v$(cut -d . -f 1,2 < /etc/alpine-release)/community" >> /etc/apk/repositories
+
+# Standard non-root user for all Python applications
+ENV APP_USER=app \
+APP_UID=1001 \
+APP_GID=1001
+
+# Update base system and set up Python environment
+RUN apk add --no-cache ca-certificates=20230506-r0 && \
+    python -m pip install --no-cache-dir --upgrade pip==23.3.2 && \
+    pip config set global.disable-pip-version-check true
+
+# Create application structure and user
+RUN mkdir -p /app /app/conf /app/tmp /app/data && \
+    chmod 755 /app && \
+    chmod 750 /app/conf /app/tmp /app/data && \
+    addgroup -g $APP_GID -S $APP_USER && \
+    adduser -u $APP_UID -S $APP_USER -G $APP_USER -s /sbin/nologin -h /app && \
+    chown -R $APP_USER:$APP_USER /app
+
+# Remove crontabs and dangerous commands
+RUN rm -fr /var/spool/cron && \
+    rm -fr /etc/crontabs && \
+    rm -fr /etc/periodic && \
+    if find /bin /etc /lib /sbin /usr -xdev \( \
+        -iname hexdump -o \
+        -iname chgrp -o \
+        -iname od -o \
+        -iname strings -o \
+        -iname su -o \
+        -iname sudo -o \
+        -iname nc -o \
+        -iname netcat -o \
+        -iname wget -o \
+        -iname curl \
+    \) -delete 2>/dev/null; then :; fi
+
+# Remove unnecessary users and disable password login
+RUN sed -i -r "/^($APP_USER|root|nobody)/!d" /etc/group && \
+    sed -i -r "/^($APP_USER|root|nobody)/!d" /etc/passwd && \
+    sed -i -r 's#^(.*):[^:]*$#\1:/sbin/nologin#' /etc/passwd && \
+    while IFS=: read -r username _; do passwd -l "$username" 2>/dev/null || true; done < /etc/passwd
+
+# Set permissions and remove dangerous files
+RUN if find / -xdev -type d -perm +0002 -exec chmod o-w {} + 2>/dev/null; then :; fi && \
+    if find / -xdev -type f -perm +0002 -exec chmod o-w {} + 2>/dev/null; then :; fi && \
+    chmod 777 /tmp/ && \
+    chown $APP_USER:$APP_USER /tmp/ && \
+    if find /bin /etc /lib /sbin /usr -xdev -type d \
+        -exec chown root:root {} \; \
+        -exec chmod 0755 {} \; 2>/dev/null; then :; fi && \
+    if find /bin /etc /lib /sbin /usr -xdev -type f -a \( -perm +4000 -o -perm +2000 \) -delete 2>/dev/null; then :; fi
+
+# Remove unnecessary system files and directories
+RUN rm -fr /etc/init.d /lib/rc /etc/conf.d /etc/inittab /etc/runlevels /etc/rc.conf /etc/logrotate.d && \
+    rm -fr /etc/sysctl* /etc/modprobe.d /etc/modules /etc/mdev.conf /etc/acpi && \
+    rm -fr /root && \
+    rm -f /etc/shadow- /etc/passwd- /etc/group- && \
+    if find /bin /etc /lib /sbin /usr -xdev -type l -exec test ! -e {} \; -delete 2>/dev/null; then :; fi && \
+    rm -f /etc/fstab && \
+    echo "umask 0027" >> /etc/profile
+
+# Copy and run post-install script
+COPY post-install-python.sh /usr/local/bin/post-install-python.sh
+RUN chmod +x /usr/local/bin/post-install-python.sh && \
+    /usr/local/bin/post-install-python.sh
+
+# Set working directory to the pre-configured app directory
+WORKDIR /app

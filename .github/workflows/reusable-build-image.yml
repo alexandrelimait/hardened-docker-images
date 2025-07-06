@@ -1,0 +1,193 @@
+name: Reusable Build Hardened Image
+
+on:
+  workflow_call:
+    inputs:
+      base_image:
+        description: 'Base image to build from'
+        required: true
+        type: string
+      image_type:
+        description: 'Type of image (node or python)'
+        required: true
+        type: string
+        default: 'node'
+      push_image:
+        description: 'Push image to registry'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      registry_username:
+        required: false
+      registry_password:
+        required: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine image configuration
+        id: config
+        run: |
+          BASE_IMAGE="${{ inputs.base_image }}"
+          IMAGE_TYPE="${{ inputs.image_type }}"
+          
+          echo "Processing $IMAGE_TYPE image based on: $BASE_IMAGE"
+          
+          # Set image-specific configuration
+          if [[ "$IMAGE_TYPE" == "node" ]]; then
+            IMAGE_NAME="nodejs-hardened-base"
+            DOCKERFILE="Dockerfile.node"
+          elif [[ "$IMAGE_TYPE" == "python" ]]; then
+            IMAGE_NAME="python-hardened-base"
+            DOCKERFILE="Dockerfile.python"
+          else
+            echo "Error: Unknown image type: $IMAGE_TYPE"
+            exit 1
+          fi
+          
+          # Extract version for tagging
+          if [[ "$IMAGE_TYPE" == "node" ]]; then
+            VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
+          else
+            VERSION=$(echo "$BASE_IMAGE" | sed 's/python://' | sed 's/:/-/g')
+          fi
+          
+          echo "Image name: $IMAGE_NAME"
+          echo "Dockerfile: $DOCKERFILE"
+          echo "Version: $VERSION"
+          
+          echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "dockerfile=$DOCKERFILE" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # - name: Login to Container registry
+      #   if: ${{ !env.ACT && inputs.push_image }}
+      #   run: |
+      #     docker login -u ${{ secrets.registry_username }} -p ${{ secrets.registry_password }} ${{ env.REGISTRY }}
+
+      - name: Build image
+        run: |
+          BASE_IMAGE="${{ inputs.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          DOCKERFILE="${{ steps.config.outputs.dockerfile }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Building image based on: $BASE_IMAGE"
+          echo "Using Dockerfile: $DOCKERFILE"
+          echo "Image name: $IMAGE_NAME"
+          echo "Version: $VERSION"
+          
+          # Build the image
+          DOCKER_BUILDKIT=1 docker build \
+            --cache-from=${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg BASE_IMAGE="$BASE_IMAGE" \
+            --build-arg COMMIT_HASH=$GITHUB_SHA \
+            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            -t ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
+            -t ${{ env.REGISTRY }}/$IMAGE_NAME:latest \
+            -f .github/.images/$DOCKERFILE .github/.images
+          echo "Successfully built: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+
+      - name: Install Cosign
+        if: ${{ !env.ACT && inputs.push_image }}
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.4'
+
+      - name: Sign container images
+        if: ${{ !env.ACT && inputs.push_image }}
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          BASE_IMAGE="${{ inputs.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          # Sign the versioned image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          # Sign the latest image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Successfully signed images"
+
+      - name: Generate SLSA attestation
+        if: ${{ !env.ACT && inputs.push_image }}
+        run: |
+          BASE_IMAGE="${{ inputs.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          # Create SLSA attestation
+          echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign attest --yes --type slsaprovenance \
+            --predicate <(echo '{
+              "builder": {
+                "id": "https://github.com/Actions/actions-runner"
+              },
+              "buildType": "https://github.com/actions/workflow",
+              "invocation": {
+                "configSource": {
+                  "uri": "${{ github.server_url }}/${{ github.repository }}",
+                  "digest": {
+                    "sha1": "${{ github.sha }}"
+                  }
+                }
+              },
+              "metadata": {
+                "buildInvocationId": "${{ github.run_id }}",
+                "buildStartedOn": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+                "completeness": {
+                  "parameters": true,
+                  "environment": true,
+                  "materials": true
+                }
+              },
+              "materials": [
+                {
+                  "uri": "docker://'"$BASE_IMAGE"'",
+                  "digest": {}
+                }
+              ]
+            }') \
+            ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          echo "Successfully created SLSA attestation"
+
+      # - name: Push image
+      #   if: ${{ !env.ACT && inputs.push_image }}
+      #   run: |
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
+      #     echo "Pushing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+      #     echo "Successfully pushed: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+
+  summary:
+    needs: build-image
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Create build summary
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Base Image**: ${{ inputs.base_image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Type**: ${{ inputs.image_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Pushed**: ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Signed**: Cosign signatures applied" >> $GITHUB_STEP_SUMMARY
+          echo "**SLSA Attestation**: Supply chain metadata attached" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Status**: ${{ needs.build-image.result }}" >> $GITHUB_STEP_SUMMARY 

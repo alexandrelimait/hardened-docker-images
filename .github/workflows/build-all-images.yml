@@ -1,0 +1,74 @@
+name: Build All Hardened Images
+
+on:
+  push:
+    paths:
+      - '.github/.images/**'
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: 'Push images to registry'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-node-images:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: node:18-alpine
+      image_type: node
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  build-node-20:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: node:20-alpine
+      image_type: node
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  build-node-22:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: node:22-alpine
+      image_type: node
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  build-python-311:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: python:3.11-alpine
+      image_type: python
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  build-python-312:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: python:3.12-alpine
+      image_type: python
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  build-python-313:
+    uses: ./.github/workflows/reusable-build-image.yml
+    with:
+      base_image: python:3.13-alpine
+      image_type: python
+      push_image: ${{ inputs.push_images }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }} 

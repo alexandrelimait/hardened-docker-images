@@ -1,0 +1,37 @@
+name: Dockerfile Lint
+
+on:
+  push:
+    paths:
+      - '**.Dockerfile*'
+      - '.github/.images/**'
+  pull_request:
+    paths:
+      - '**.Dockerfile*'
+      - '.github/.images/**'
+
+jobs:
+  hadolint:
+    name: Lint Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: .github/.images/
+          format: sarif
+          output-file: hadolint-results.sarif
+          ignore-rules: |
+            DL3006
+            DL3018
+            DL3042
+            DL3013
+            DL3059
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: hadolint-results.sarif 

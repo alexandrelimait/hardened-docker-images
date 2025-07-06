@@ -1,4 +1,4 @@
-name: Build Hardened Base Image
+name: Build Hardened Base Images
 
 on:
   # schedule:
@@ -17,6 +17,9 @@ on:
           node:18-alpine
           node:20-alpine
           node:22-alpine
+          python:3.11-alpine
+          python:3.12-alpine
+          python:3.13-alpine
       push_image:
         description: 'Push image to registry'
         required: false
@@ -25,7 +28,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: nodejs-hardened-base
 
 jobs:
   prepare-matrix:
@@ -40,7 +42,10 @@ jobs:
           if [ -z "$BASE_IMAGES" ]; then
             BASE_IMAGES="node:18-alpine
           node:20-alpine
-          node:22-alpine"
+          node:22-alpine
+          python:3.11-alpine
+          python:3.12-alpine
+          python:3.13-alpine"
           fi
           echo "Input images: $BASE_IMAGES"
           # Convert newline-separated list to JSON array
@@ -62,6 +67,45 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Determine image type and configuration
+        id: config
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          echo "Processing base image: $BASE_IMAGE"
+          
+          # Determine if it's a Node.js or Python image
+          if [[ "$BASE_IMAGE" == node:* ]]; then
+            IMAGE_TYPE="node"
+            IMAGE_NAME="nodejs-hardened-base"
+            DOCKERFILE="Dockerfile.node"
+            POST_INSTALL_SCRIPT="post-install-node.sh"
+          elif [[ "$BASE_IMAGE" == python:* ]]; then
+            IMAGE_TYPE="python"
+            IMAGE_NAME="python-hardened-base"
+            DOCKERFILE="Dockerfile.python"
+            POST_INSTALL_SCRIPT="post-install-python.sh"
+          else
+            echo "Error: Unknown image type for $BASE_IMAGE"
+            exit 1
+          fi
+          
+          # Extract version for tagging
+          if [[ "$IMAGE_TYPE" == "node" ]]; then
+            VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
+          else
+            VERSION=$(echo "$BASE_IMAGE" | sed 's/python://' | sed 's/:/-/g')
+          fi
+          
+          echo "Image type: $IMAGE_TYPE"
+          echo "Image name: $IMAGE_NAME"
+          echo "Dockerfile: $DOCKERFILE"
+          echo "Version: $VERSION"
+          
+          echo "image_type=$IMAGE_TYPE" >> $GITHUB_OUTPUT
+          echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "dockerfile=$DOCKERFILE" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       # - name: Login to Container registry
       #   if: ${{ !env.ACT }}
       #   run: |
@@ -70,20 +114,27 @@ jobs:
       - name: Build image
         run: |
           BASE_IMAGE="${{ matrix.base_image }}"
-          echo "Building image based on: $BASE_IMAGE"
-          # Extract version for tagging
-          NODE_VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
+          IMAGE_TYPE="${{ steps.config.outputs.image_type }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          DOCKERFILE="${{ steps.config.outputs.dockerfile }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Building $IMAGE_TYPE image based on: $BASE_IMAGE"
+          echo "Using Dockerfile: $DOCKERFILE"
+          echo "Image name: $IMAGE_NAME"
+          echo "Version: $VERSION"
+          
           # Build the image
           DOCKER_BUILDKIT=1 docker build \
-            --cache-from=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION \
+            --cache-from=${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg BASE_IMAGE="$BASE_IMAGE" \
             --build-arg COMMIT_HASH=$GITHUB_SHA \
             --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            -f .github/.images/Dockerfile .github/.images
-          echo "Successfully built: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION"
+            -t ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
+            -t ${{ env.REGISTRY }}/$IMAGE_NAME:latest \
+            -f .github/.images/$DOCKERFILE .github/.images
+          echo "Successfully built: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
       # - name: Install Cosign
       #   if: ${{ !env.ACT }}
@@ -97,22 +148,24 @@ jobs:
       #     COSIGN_EXPERIMENTAL: 1
       #   run: |
       #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     NODE_VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
       #     # Sign the versioned image
-      #     echo "Signing image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION"
-      #     cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION
+      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
       #     # Sign the latest image
-      #     echo "Signing image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-      #     cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
       #     echo "Successfully signed images"
 
       # - name: Generate SLSA attestation
       #   if: ${{ !env.ACT }}
       #   run: |
       #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     NODE_VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
       #     # Create SLSA attestation
-      #     echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION"
+      #     echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
       #     cosign attest --yes --type slsaprovenance \
       #       --predicate <(echo '{
       #         "builder": {
@@ -143,18 +196,18 @@ jobs:
       #           }
       #         ]
       #       }') \
-      #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION
+      #       ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
       #     echo "Successfully created SLSA attestation"
 
       # - name: Push image
       #   if: ${{ !env.ACT && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
       #   run: |
-      #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     NODE_VERSION=$(echo "$BASE_IMAGE" | sed 's/node://' | sed 's/:/-/g')
-      #     echo "Pushing image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION"
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-      #     echo "Successfully pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$NODE_VERSION"
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
+      #     echo "Pushing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+      #     echo "Successfully pushed: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
   summary:
     needs: [prepare-matrix, build-images]
@@ -168,7 +221,7 @@ jobs:
           echo "**Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
           echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Name**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Types**: Node.js and Python hardened base images" >> $GITHUB_STEP_SUMMARY
           echo "**Pushed**: ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY
           echo "**Signed**: Cosign signatures applied" >> $GITHUB_STEP_SUMMARY
           echo "**SLSA Attestation**: Supply chain metadata attached" >> $GITHUB_STEP_SUMMARY
