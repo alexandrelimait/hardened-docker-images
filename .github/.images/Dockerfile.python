@@ -16,7 +16,7 @@ APP_UID=1001 \
 APP_GID=1001
 
 # Update base system and set up Python environment
-RUN apk add --no-cache ca-certificates=20230506-r0 && \
+RUN apk add --no-cache ca-certificates && \
     python -m pip install --no-cache-dir --upgrade pip==23.3.2 && \
     pip config set global.disable-pip-version-check true
 

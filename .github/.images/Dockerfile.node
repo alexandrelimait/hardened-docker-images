@@ -16,7 +16,7 @@ ENV APP_USER=app \
     APP_GID=1001
 
 # Update base system and create application structure
-RUN apk add --no-cache ca-certificates=20230506-r0 && \
+RUN apk add --no-cache ca-certificates && \
     mkdir -p /app /app/conf /app/tmp /app/data && \
     chmod 755 /app && \
     chmod 750 /app/conf /app/tmp /app/data
