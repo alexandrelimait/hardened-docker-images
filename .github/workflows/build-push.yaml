@@ -136,68 +136,65 @@ jobs:
             -f .github/.images/$DOCKERFILE .github/.images
           echo "Successfully built: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
-      # - name: Install Cosign
-      #   if: ${{ !env.ACT }}
-      #   uses: sigstore/cosign-installer@v3
-      #   with:
-      #     cosign-release: 'v2.2.4'
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.4'
 
-      # - name: Sign container images
-      #   if: ${{ !env.ACT }}
-      #   env:
-      #     COSIGN_EXPERIMENTAL: 1
-      #   run: |
-      #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-      #     VERSION="${{ steps.config.outputs.version }}"
-      #     # Sign the versioned image
-      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-      #     # Sign the latest image
-      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
-      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
-      #     echo "Successfully signed images"
+      - name: Sign container images
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          # Sign the versioned image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          # Sign the latest image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Successfully signed images"
 
-      # - name: Generate SLSA attestation
-      #   if: ${{ !env.ACT }}
-      #   run: |
-      #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-      #     VERSION="${{ steps.config.outputs.version }}"
-      #     # Create SLSA attestation
-      #     echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-      #     cosign attest --yes --type slsaprovenance \
-      #       --predicate <(echo '{
-      #         "builder": {
-      #           "id": "https://github.com/Actions/actions-runner"
-      #         },
-      #         "buildType": "https://github.com/actions/workflow",
-      #         "invocation": {
-      #           "configSource": {
-      #             "uri": "${{ github.server_url }}/${{ github.repository }}",
-      #             "digest": {
-      #               "sha1": "${{ github.sha }}"
-      #             }
-      #           }
-      #         },
-      #         "metadata": {
-      #           "buildInvocationId": "${{ github.run_id }}",
-      #           "buildStartedOn": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
-      #           "completeness": {
-      #             "parameters": true,
-      #             "environment": true,
-      #             "materials": true
-      #           }
-      #         },
-      #         "materials": [
-      #           {
-      #             "uri": "docker://'"$BASE_IMAGE"'",
-      #             "digest": {}
-      #           }
-      #         ]
-      #       }') \
-      #       ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-      #     echo "Successfully created SLSA attestation"
+      - name: Generate SLSA attestation
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          # Create SLSA attestation
+          echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign attest --yes --type slsaprovenance \
+            --predicate <(echo '{
+              "builder": {
+                "id": "https://github.com/Actions/actions-runner"
+              },
+              "buildType": "https://github.com/actions/workflow",
+              "invocation": {
+                "configSource": {
+                  "uri": "${{ github.server_url }}/${{ github.repository }}",
+                  "digest": {
+                    "sha1": "${{ github.sha }}"
+                  }
+                }
+              },
+              "metadata": {
+                "buildInvocationId": "${{ github.run_id }}",
+                "buildStartedOn": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+                "completeness": {
+                  "parameters": true,
+                  "environment": true,
+                  "materials": true
+                }
+              },
+              "materials": [
+                {
+                  "uri": "docker://'"$BASE_IMAGE"'",
+                  "digest": {}
+                }
+              ]
+            }') \
+            ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          echo "Successfully created SLSA attestation"
 
       # - name: Push image
       #   if: ${{ !env.ACT && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
