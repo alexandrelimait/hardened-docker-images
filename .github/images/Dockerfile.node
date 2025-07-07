@@ -1,5 +1,6 @@
 # Must specify BASE_IMAGE build-arg (e.g., node:18-alpine, node:20-alpine, node:22-alpine)
 # Note: BASE_IMAGE should be a fully qualified image with tag (e.g., node:18.19.0-alpine3.18)=node:18-alpine
+ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 # Make a pipe fail on the first failure
