@@ -16,7 +16,6 @@ on:
         default: |
           node:18-alpine
           node:20-alpine
-          node:20.19.3-bullseye
           python:3.11-alpine
           python:3.12-alpine
           python:3.13-alpine
@@ -30,7 +29,6 @@ env:
   DEFAULT_BASE_IMAGES: |
     node:18-alpine
     node:20-alpine
-    node:20.19.3-bullseye
     python:3.11-alpine
     python:3.12-alpine
     python:3.13-alpine
@@ -235,7 +233,6 @@ jobs:
 
       - name: Upload vulnerability scan results
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: vulnerability-results-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}
           path: |
@@ -257,7 +254,7 @@ jobs:
   summary:
     needs: [prepare-matrix, build-images]
     runs-on: ubuntu-latest
-    if: always()
+    if: needs.build-images.result == 'success'
     steps:
       - name: Create build summary
         run: |
