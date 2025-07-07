@@ -77,6 +77,14 @@ jobs:
         with:
           driver: docker-container
 
+      - name: Verify Buildx setup
+        run: |
+          echo "Available builders:"
+          docker buildx ls
+          echo ""
+          echo "Default builder:"
+          docker buildx inspect --bootstrap
+
       - name: Determine image type and configuration
         id: config
         run: |
@@ -137,6 +145,8 @@ jobs:
             BASE_IMAGE=${{ matrix.base_image }}
             COMMIT_HASH=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          builder: default
+          provenance: false
 
       - name: Run Trivy vulnerability scanner (OS packages)
         uses: aquasecurity/trivy-action@0.28.0
