@@ -26,7 +26,6 @@ on:
         type: boolean
 
 env:
-  REGISTRY: ghcr.io
   DEFAULT_BASE_IMAGES: |
     node:18-alpine
     node:20-alpine
@@ -109,9 +108,12 @@ jobs:
           echo "dockerfile=$DOCKERFILE" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # - name: Login to Container registry
-      #   run: |
-      #     docker login -u ${{ secrets.REGISTRY_USERNAME }} -p ${{ secrets.REGISTRY_PASSWORD }} ${{ env.REGISTRY }}
+      - name: Login to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Build image
         run: |
@@ -241,6 +243,16 @@ jobs:
             vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
           retention-days: 30
 
+      - name: Push image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
+        run: |
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          echo "Pushing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          docker push ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          docker push ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Successfully pushed: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
@@ -301,15 +313,6 @@ jobs:
       #       ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
       #     echo "Successfully created SLSA attestation"
 
-      # - name: Push image
-      #   if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
-      #   run: |
-      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-      #     VERSION="${{ steps.config.outputs.version }}"
-      #     echo "Pushing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-      #     docker push ${{ env.REGISTRY }}/$IMAGE_NAME:latest
-      #     echo "Successfully pushed: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
   summary:
     needs: [prepare-matrix, build-images]
@@ -322,7 +325,7 @@ jobs:
           echo "**Base Images**: ${{ inputs.base_images }}" >> $GITHUB_STEP_SUMMARY
           echo "**Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
           echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: Azure Container Registry (${{ env.REGISTRY }})" >> $GITHUB_STEP_SUMMARY
           echo "**Image Types**: Node.js and Python hardened base images" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerability Scanning**: Trivy OS vulnerability scanning" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerability Patching**: Copa automatic patching applied" >> $GITHUB_STEP_SUMMARY
