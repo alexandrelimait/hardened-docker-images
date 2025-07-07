@@ -121,51 +121,20 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Build image
-        run: |
-          BASE_IMAGE="${{ matrix.base_image }}"
-          IMAGE_TYPE="${{ steps.config.outputs.image_type }}"
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          DOCKERFILE="${{ steps.config.outputs.dockerfile }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          
-          echo "Building $IMAGE_TYPE image based on: $BASE_IMAGE"
-          echo "Using Dockerfile: $DOCKERFILE"
-          echo "Image name: $IMAGE_NAME"
-          echo "Version: $VERSION"
-          
-          # Build multi-platform image with Buildx
-          if [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ inputs.push_image }}" == "true" ]]; then
-            echo "Building and pushing multi-platform image..."
-            docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --cache-from=type=registry,ref=${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
-              --cache-to=type=inline \
-              --build-arg BUILDKIT_INLINE_CACHE=1 \
-              --build-arg BASE_IMAGE="$BASE_IMAGE" \
-              --build-arg COMMIT_HASH=$GITHUB_SHA \
-              --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-              --tag ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
-              --file .github/images/$DOCKERFILE \
-              --push \
-              .github/images
-            echo "Successfully built and pushed multi-platform image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          else
-            echo "Building multi-platform image (no push)..."
-            docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --cache-from=type=registry,ref=${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
-              --cache-to=type=inline \
-              --build-arg BUILDKIT_INLINE_CACHE=1 \
-              --build-arg BASE_IMAGE="$BASE_IMAGE" \
-              --build-arg COMMIT_HASH=$GITHUB_SHA \
-              --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-              --tag ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
-              --file .github/images/$DOCKERFILE \
-              --load \
-              .github/images
-            echo "Successfully built multi-platform image (not pushed): ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          fi
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .github/images
+          file: .github/images/${{ steps.config.outputs.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
+          tags: ${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
+          cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
+          cache-to: type=inline
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+            COMMIT_HASH=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
 
       - name: Run Trivy vulnerability scanner (OS packages)
         uses: aquasecurity/trivy-action@0.28.0
