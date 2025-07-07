@@ -30,6 +30,7 @@ env:
   DEFAULT_BASE_IMAGES: |
     node:18-alpine
     node:20-alpine
+    node:20.19.3-bullseye
     python:3.11-alpine
     python:3.12-alpine
     python:3.13-alpine
