@@ -128,7 +128,7 @@ jobs:
           echo "Image name: $IMAGE_NAME"
           echo "Version: $VERSION"
           
-          # Build the image
+          # Build the image with specific version tag
           DOCKER_BUILDKIT=1 docker build \
             --cache-from=${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
@@ -136,7 +136,6 @@ jobs:
             --build-arg COMMIT_HASH=$GITHUB_SHA \
             --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
             -t ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
-            -t ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest \
             -f .github/images/$DOCKERFILE .github/images
           echo "Successfully built: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
@@ -243,36 +242,46 @@ jobs:
             vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
           retention-days: 30
 
-      - name: Push image
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
-        run: |
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          echo "Pushing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          docker push ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
-          docker push ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
-          echo "Successfully pushed: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
-
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: 'v2.2.4'
 
-      - name: Sign container images
+      - name: Sign container images (versioned tags only)
         env:
           COSIGN_EXPERIMENTAL: 1
         run: |
           BASE_IMAGE="${{ matrix.base_image }}"
           IMAGE_NAME="${{ steps.config.outputs.image_name }}"
           VERSION="${{ steps.config.outputs.version }}"
+          
           # Sign the versioned image
-          echo "Signing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          echo "Signing versioned image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
           cosign sign --yes ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
-          # Sign the latest image
-          echo "Signing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest"
-          cosign sign --yes ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
-          echo "Successfully signed images"
+          echo "Successfully signed versioned image"
+          
+      - name: Verify signatures
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Verifying signature for: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign verify ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
+          echo "✅ Signature verification successful"
 
+      - name: Push image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
+        run: |
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Pushing versioned image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          docker push ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
+          echo "Successfully pushed versioned image"
+          
       # - name: Generate SLSA attestation
       #   run: |
       #     BASE_IMAGE="${{ matrix.base_image }}"
