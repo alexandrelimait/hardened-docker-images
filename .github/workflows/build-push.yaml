@@ -77,10 +77,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
-          driver-opts: |
-            image=moby/buildkit:v0.22.0
-          buildkitd-flags: --debug
-          platforms: linux/amd64,linux/arm64
+
 
       - name: Verify Buildx setup
         run: |
@@ -141,7 +138,7 @@ jobs:
         with:
           context: .github/images
           file: .github/images/${{ steps.config.outputs.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
           tags: ${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
           cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
