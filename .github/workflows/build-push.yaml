@@ -77,6 +77,10 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:v0.22.0
+          buildkitd-flags: --debug
+          platforms: linux/amd64,linux/arm64
 
       - name: Verify Buildx setup
         run: |
@@ -147,6 +151,7 @@ jobs:
             COMMIT_HASH=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
+          builder: ${{ steps.buildx.outputs.name }}
 
       - name: Run Trivy vulnerability scanner (OS packages)
         uses: aquasecurity/trivy-action@0.28.0
