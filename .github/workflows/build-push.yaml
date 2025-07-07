@@ -269,7 +269,7 @@ jobs:
           VERSION="${{ steps.config.outputs.version }}"
           
           echo "Verifying signature for: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          cosign verify ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
+          cosign verify --certificate-identity-regexp="https://github.com/.*" ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
           echo "✅ Signature verification successful"
 
       - name: Push image
