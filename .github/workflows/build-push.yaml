@@ -130,20 +130,20 @@ jobs:
           
           # Build the image
           DOCKER_BUILDKIT=1 docker build \
-            --cache-from=${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
+            --cache-from=${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg BASE_IMAGE="$BASE_IMAGE" \
             --build-arg COMMIT_HASH=$GITHUB_SHA \
             --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            -t ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
-            -t ${{ env.REGISTRY }}/$IMAGE_NAME:latest \
+            -t ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION \
+            -t ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest \
             -f .github/images/$DOCKERFILE .github/images
-          echo "Successfully built: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          echo "Successfully built: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
       - name: Run Trivy vulnerability scanner (OS packages)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          image-ref: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
           format: 'json'
           output: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
           exit-code: '0'
@@ -154,7 +154,7 @@ jobs:
       - name: Display vulnerability scan results
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          image-ref: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
           format: 'table'
           exit-code: '0'
           ignore-unfixed: true
@@ -181,7 +181,7 @@ jobs:
         id: copa
         uses: project-copacetic/copa-action@v1.2.1
         with:
-          image: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          image: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
           image-report: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
           patched-tag: 'temp-patched'
           timeout: '5m'
@@ -199,8 +199,8 @@ jobs:
           PATCHED_IMAGE="${{ steps.copa.outputs.patched-image }}"
           
           # Retag to original version and latest
-          docker tag "$PATCHED_IMAGE" ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-          docker tag "$PATCHED_IMAGE" ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          docker tag "$PATCHED_IMAGE" ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
+          docker tag "$PATCHED_IMAGE" ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
           
           # Clean up the temporary tag
           docker rmi "$PATCHED_IMAGE" || true
@@ -218,7 +218,7 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             aquasecurity/trivy:latest image --vuln-type os --ignore-unfixed \
             --format json --output "$PATCHED_VULN_FILE" \
-            ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+            ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
           
           ORIGINAL_VULN_COUNT="${{ steps.vuln_count.outputs.vuln_count }}"
           PATCHED_VULN_COUNT=$(jq 'if .Results then [.Results[] | select(.Class=="os-pkgs" and .Vulnerabilities!=null) | .Vulnerabilities[]] | length else 0 end' "$PATCHED_VULN_FILE")
@@ -248,10 +248,10 @@ jobs:
         run: |
           IMAGE_NAME="${{ steps.config.outputs.image_name }}"
           VERSION="${{ steps.config.outputs.version }}"
-          echo "Pushing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          docker push ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-          docker push ${{ env.REGISTRY }}/$IMAGE_NAME:latest
-          echo "Successfully pushed: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          echo "Pushing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          docker push ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
+          docker push ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Successfully pushed: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
@@ -266,11 +266,11 @@ jobs:
           IMAGE_NAME="${{ steps.config.outputs.image_name }}"
           VERSION="${{ steps.config.outputs.version }}"
           # Sign the versioned image
-          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          echo "Signing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign sign --yes ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
           # Sign the latest image
-          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
-          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Signing image: ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest"
+          cosign sign --yes ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
           echo "Successfully signed images"
 
       # - name: Generate SLSA attestation
@@ -279,7 +279,7 @@ jobs:
       #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
       #     VERSION="${{ steps.config.outputs.version }}"
       #     # Create SLSA attestation
-      #     echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     echo "Creating SLSA attestation for: ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION"
       #     cosign attest --yes --type slsaprovenance \
       #       --predicate <(echo '{
       #         "builder": {
@@ -310,7 +310,7 @@ jobs:
       #           }
       #         ]
       #       }') \
-      #       ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+      #       ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
       #     echo "Successfully created SLSA attestation"
 
 
@@ -325,7 +325,7 @@ jobs:
           echo "**Base Images**: ${{ inputs.base_images }}" >> $GITHUB_STEP_SUMMARY
           echo "**Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
           echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry**: Azure Container Registry (${{ env.REGISTRY }})" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: Azure Container Registry (${{ secrets.REGISTRY }})" >> $GITHUB_STEP_SUMMARY
           echo "**Image Types**: Node.js and Python hardened base images" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerability Scanning**: Trivy OS vulnerability scanning" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerability Patching**: Copa automatic patching applied" >> $GITHUB_STEP_SUMMARY
