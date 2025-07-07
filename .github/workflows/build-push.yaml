@@ -81,6 +81,16 @@ jobs:
             image=moby/buildkit:v0.22.0
           buildkitd-flags: --debug
 
+      - name: Verify Buildx setup
+        run: |
+          echo "Available builders:"
+          docker buildx ls
+          echo ""
+          echo "Default builder:"
+          docker buildx inspect --bootstrap
+          echo ""
+          echo "Builder name: ${{ steps.buildx.outputs.name }}"
+
       - name: Determine image type and configuration
         id: config
         run: |
@@ -133,13 +143,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
           tags: ${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
-          cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:cache
-          cache-to: type=registry,ref=${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:cache,mode=max
+          cache-from: type=registry,ref=${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}
+          cache-to: type=inline
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
             COMMIT_HASH=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
+          builder: ${{ steps.buildx.outputs.name }}
 
   summary:
     needs: [prepare-matrix, build-images]
