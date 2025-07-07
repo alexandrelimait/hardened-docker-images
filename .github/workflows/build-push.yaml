@@ -258,20 +258,20 @@ jobs:
         with:
           cosign-release: 'v2.2.4'
 
-      # - name: Sign container images
-      #   env:
-      #     COSIGN_EXPERIMENTAL: 1
-      #   run: |
-      #     BASE_IMAGE="${{ matrix.base_image }}"
-      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-      #     VERSION="${{ steps.config.outputs.version }}"
-      #     # Sign the versioned image
-      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-      #     # Sign the latest image
-      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
-      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
-      #     echo "Successfully signed images"
+      - name: Sign container images
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          # Sign the versioned image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          # Sign the latest image
+          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          echo "Successfully signed images"
 
       # - name: Generate SLSA attestation
       #   run: |
