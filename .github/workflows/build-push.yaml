@@ -16,6 +16,7 @@ on:
         default: |
           node:18-alpine
           node:20-alpine
+          node:20.19.3-bullseye
           python:3.11-alpine
           python:3.12-alpine
           python:3.13-alpine
@@ -268,6 +269,4 @@ jobs:
           echo "**Vulnerability Scanning**: Trivy OS vulnerability scanning" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerability Patching**: Copa automatic patching applied" >> $GITHUB_STEP_SUMMARY
           echo "**Pushed**: ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Signed**: Cosign signatures applied" >> $GITHUB_STEP_SUMMARY
-          echo "**SLSA Attestation**: Supply chain metadata attached" >> $GITHUB_STEP_SUMMARY
           echo "**Build Status**: ${{ needs.build-images.result }}" >> $GITHUB_STEP_SUMMARY
