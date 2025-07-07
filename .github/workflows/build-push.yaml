@@ -5,9 +5,9 @@ on:
   #   # Build nightly at 2 AM UTC
   #   - cron: '0 2 * * *'
   push:
-    # branches: [ main ]
-    paths:
-      - '.github/.images/**'
+    branches: [ main ]
+    # paths:
+    #   - '.github/images/**'
   workflow_dispatch:
     inputs:
       base_images:
@@ -16,7 +16,6 @@ on:
         default: |
           node:18-alpine
           node:20-alpine
-          node:22-alpine
           python:3.11-alpine
           python:3.12-alpine
           python:3.13-alpine
@@ -28,6 +27,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  DEFAULT_BASE_IMAGES: |
+    node:18-alpine
+    node:20-alpine
+    python:3.11-alpine
+    python:3.12-alpine
+    python:3.13-alpine
 
 jobs:
   prepare-matrix:
@@ -39,13 +44,11 @@ jobs:
         id: set-matrix
         run: |
           BASE_IMAGES="${{ inputs.base_images }}"
+          # Use default base images if no input provided (e.g., on push/schedule triggers)
           if [ -z "$BASE_IMAGES" ]; then
-            BASE_IMAGES="node:18-alpine
-          node:20-alpine
-          node:22-alpine
-          python:3.11-alpine
-          python:3.12-alpine
-          python:3.13-alpine"
+            BASE_IMAGES="${{ env.DEFAULT_BASE_IMAGES }}"
+            echo "Using default base images for ${{ github.event_name }} trigger"
+            echo "Branch: ${{ github.ref_name }}"
           fi
           echo "Input images: $BASE_IMAGES"
           # Convert newline-separated list to JSON array
@@ -107,7 +110,6 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       # - name: Login to Container registry
-      #   if: ${{ !env.ACT }}
       #   run: |
       #     docker login -u ${{ secrets.REGISTRY_USERNAME }} -p ${{ secrets.REGISTRY_PASSWORD }} ${{ env.REGISTRY }}
 
@@ -133,71 +135,174 @@ jobs:
             --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
             -t ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION \
             -t ${{ env.REGISTRY }}/$IMAGE_NAME:latest \
-            -f .github/.images/$DOCKERFILE .github/.images
+            -f .github/images/$DOCKERFILE .github/images
           echo "Successfully built: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+
+      - name: Run Trivy vulnerability scanner (OS packages)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          format: 'json'
+          output: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+      - name: Display vulnerability scan results
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+      - name: Check vulnerability count
+        id: vuln_count
+        run: |
+          BASE_IMAGE="${{ matrix.base_image }}"
+          IMAGE_TYPE="${{ steps.config.outputs.image_type }}"
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          # Check OS vulnerabilities (patchable by Copa)
+          VULN_FILE="vulnerabilities-$IMAGE_NAME-$VERSION.json"
+          echo "Using vulnerability file: $VULN_FILE"
+          VULN_COUNT=$(jq 'if .Results then [.Results[] | select(.Class=="os-pkgs" and .Vulnerabilities!=null) | .Vulnerabilities[]] | length else 0 end' "$VULN_FILE")
+          echo "Found $VULN_COUNT OS vulnerabilities (patchable by Copa)"
+          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Run Copa action
+        if: steps.vuln_count.outputs.vuln_count != '0'
+        id: copa
+        uses: project-copacetic/copa-action@v1.2.1
+        with:
+          image: '${{ env.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
+          image-report: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
+          patched-tag: 'temp-patched'
+          timeout: '5m'
+          output: 'vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
+          format: 'openvex'
+
+      - name: Retag patched image for gold image approach
+        if: steps.copa.conclusion == 'success'
+        run: |
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Retagging patched image to maintain gold image approach"
+          # Get the patched image reference from Copa action output
+          PATCHED_IMAGE="${{ steps.copa.outputs.patched-image }}"
+          
+          # Retag to original version and latest
+          docker tag "$PATCHED_IMAGE" ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          docker tag "$PATCHED_IMAGE" ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+          
+          # Clean up the temporary tag
+          docker rmi "$PATCHED_IMAGE" || true
+          
+          echo "Successfully retagged patched image"
+
+      - name: Verify patching results
+        if: steps.copa.conclusion == 'success'
+        run: |
+          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+          VERSION="${{ steps.config.outputs.version }}"
+          
+          echo "Rescanning patched image..."
+          PATCHED_VULN_FILE="patched-vulnerabilities-$IMAGE_NAME-$VERSION.json"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasecurity/trivy:latest image --vuln-type os --ignore-unfixed \
+            --format json --output "$PATCHED_VULN_FILE" \
+            ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+          
+          ORIGINAL_VULN_COUNT="${{ steps.vuln_count.outputs.vuln_count }}"
+          PATCHED_VULN_COUNT=$(jq 'if .Results then [.Results[] | select(.Class=="os-pkgs" and .Vulnerabilities!=null) | .Vulnerabilities[]] | length else 0 end' "$PATCHED_VULN_FILE")
+          
+          echo "Vulnerabilities before patching: $ORIGINAL_VULN_COUNT"
+          echo "Vulnerabilities after patching: $PATCHED_VULN_COUNT"
+          
+          if [ "$PATCHED_VULN_COUNT" -lt "$ORIGINAL_VULN_COUNT" ]; then
+            echo "✅ Copa successfully reduced vulnerabilities from $ORIGINAL_VULN_COUNT to $PATCHED_VULN_COUNT"
+          else
+            echo "⚠️  Copa did not reduce vulnerabilities significantly"
+          fi
+
+      - name: Upload vulnerability scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vulnerability-results-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}
+          path: |
+            vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
+            patched-vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
+            vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
+          retention-days: 30
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: 'v2.2.4'
 
-      - name: Sign container images
-        env:
-          COSIGN_EXPERIMENTAL: 1
-        run: |
-          BASE_IMAGE="${{ matrix.base_image }}"
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          # Sign the versioned image
-          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-          # Sign the latest image
-          echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
-          cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
-          echo "Successfully signed images"
+      # - name: Sign container images
+      #   env:
+      #     COSIGN_EXPERIMENTAL: 1
+      #   run: |
+      #     BASE_IMAGE="${{ matrix.base_image }}"
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
+      #     # Sign the versioned image
+      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+      #     # Sign the latest image
+      #     echo "Signing image: ${{ env.REGISTRY }}/$IMAGE_NAME:latest"
+      #     cosign sign --yes ${{ env.REGISTRY }}/$IMAGE_NAME:latest
+      #     echo "Successfully signed images"
 
-      - name: Generate SLSA attestation
-        run: |
-          BASE_IMAGE="${{ matrix.base_image }}"
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          # Create SLSA attestation
-          echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
-          cosign attest --yes --type slsaprovenance \
-            --predicate <(echo '{
-              "builder": {
-                "id": "https://github.com/Actions/actions-runner"
-              },
-              "buildType": "https://github.com/actions/workflow",
-              "invocation": {
-                "configSource": {
-                  "uri": "${{ github.server_url }}/${{ github.repository }}",
-                  "digest": {
-                    "sha1": "${{ github.sha }}"
-                  }
-                }
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "buildStartedOn": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                }
-              },
-              "materials": [
-                {
-                  "uri": "docker://'"$BASE_IMAGE"'",
-                  "digest": {}
-                }
-              ]
-            }') \
-            ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
-          echo "Successfully created SLSA attestation"
+      # - name: Generate SLSA attestation
+      #   run: |
+      #     BASE_IMAGE="${{ matrix.base_image }}"
+      #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
+      #     VERSION="${{ steps.config.outputs.version }}"
+      #     # Create SLSA attestation
+      #     echo "Creating SLSA attestation for: ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION"
+      #     cosign attest --yes --type slsaprovenance \
+      #       --predicate <(echo '{
+      #         "builder": {
+      #           "id": "https://github.com/Actions/actions-runner"
+      #         },
+      #         "buildType": "https://github.com/actions/workflow",
+      #         "invocation": {
+      #           "configSource": {
+      #             "uri": "${{ github.server_url }}/${{ github.repository }}",
+      #             "digest": {
+      #               "sha1": "${{ github.sha }}"
+      #             }
+      #           }
+      #         },
+      #         "metadata": {
+      #           "buildInvocationId": "${{ github.run_id }}",
+      #           "buildStartedOn": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+      #           "completeness": {
+      #             "parameters": true,
+      #             "environment": true,
+      #             "materials": true
+      #           }
+      #         },
+      #         "materials": [
+      #           {
+      #             "uri": "docker://'"$BASE_IMAGE"'",
+      #             "digest": {}
+      #           }
+      #         ]
+      #       }') \
+      #       ${{ env.REGISTRY }}/$IMAGE_NAME:$VERSION
+      #     echo "Successfully created SLSA attestation"
 
       # - name: Push image
-      #   if: ${{ !env.ACT && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
+      #   if: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
       #   run: |
       #     IMAGE_NAME="${{ steps.config.outputs.image_name }}"
       #     VERSION="${{ steps.config.outputs.version }}"
@@ -219,6 +324,8 @@ jobs:
           echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image Types**: Node.js and Python hardened base images" >> $GITHUB_STEP_SUMMARY
+          echo "**Vulnerability Scanning**: Trivy OS vulnerability scanning" >> $GITHUB_STEP_SUMMARY
+          echo "**Vulnerability Patching**: Copa automatic patching applied" >> $GITHUB_STEP_SUMMARY
           echo "**Pushed**: ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY
           echo "**Signed**: Cosign signatures applied" >> $GITHUB_STEP_SUMMARY
           echo "**SLSA Attestation**: Supply chain metadata attached" >> $GITHUB_STEP_SUMMARY

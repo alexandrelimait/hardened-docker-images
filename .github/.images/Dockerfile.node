@@ -1,6 +1,5 @@
 # Must specify BASE_IMAGE build-arg (e.g., node:18-alpine, node:20-alpine, node:22-alpine)
-# Note: BASE_IMAGE should be a fully qualified image with tag (e.g., node:18.19.0-alpine3.18)
-ARG BASE_IMAGE
+# Note: BASE_IMAGE should be a fully qualified image with tag (e.g., node:18.19.0-alpine3.18)=node:18-alpine
 FROM ${BASE_IMAGE}
 
 # Make a pipe fail on the first failure
@@ -16,7 +15,7 @@ ENV APP_USER=app \
     APP_GID=1001
 
 # Update base system and create application structure
-RUN apk add --no-cache ca-certificates && \
+RUN apk update && apk upgrade && apk add --no-cache ca-certificates && apk add libcap && \
     mkdir -p /app /app/conf /app/tmp /app/data && \
     chmod 755 /app && \
     chmod 750 /app/conf /app/tmp /app/data
