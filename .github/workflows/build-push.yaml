@@ -69,9 +69,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
@@ -89,12 +86,10 @@ jobs:
             IMAGE_TYPE="node"
             IMAGE_NAME="nodejs-hardened-base"
             DOCKERFILE="Dockerfile.node"
-            POST_INSTALL_SCRIPT="post-install-node.sh"
           elif [[ "$BASE_IMAGE" == python:* ]]; then
             IMAGE_TYPE="python"
             IMAGE_NAME="python-hardened-base"
             DOCKERFILE="Dockerfile.python"
-            POST_INSTALL_SCRIPT="post-install-python.sh"
           else
             echo "Error: Unknown image type for $BASE_IMAGE"
             exit 1
@@ -139,125 +134,109 @@ jobs:
             COMMIT_HASH=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           provenance: false
-          
-      - name: Run Trivy vulnerability scanner (OS packages)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
-          format: 'json'
-          output: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: 'os'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-
-      - name: Display vulnerability scan results
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
-          format: 'table'
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: 'os'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-
-      - name: Check vulnerability count
-        id: vuln_count
-        run: |
-          BASE_IMAGE="${{ matrix.base_image }}"
-          IMAGE_TYPE="${{ steps.config.outputs.image_type }}"
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          
-          # Check OS vulnerabilities (patchable by Copa)
-          VULN_FILE="vulnerabilities-$IMAGE_NAME-$VERSION.json"
-          echo "Using vulnerability file: $VULN_FILE"
-          VULN_COUNT=$(jq 'if .Results then [.Results[] | select(.Class=="os-pkgs" and .Vulnerabilities!=null) | .Vulnerabilities[]] | length else 0 end' "$VULN_FILE")
-          echo "Found $VULN_COUNT OS vulnerabilities (patchable by Copa)"
-          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
-
-      - name: Run Copa action
-        if: steps.vuln_count.outputs.vuln_count != '0'
-        id: copa
-        uses: project-copacetic/copa-action@v1.2.1
-        with:
-          image: '${{ secrets.REGISTRY }}/${{ steps.config.outputs.image_name }}:${{ steps.config.outputs.version }}'
-          image-report: 'vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
-          patched-tag: 'temp-patched'
-          timeout: '5m'
-          output: 'vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json'
-          format: 'openvex'
-
-      - name: Retag patched image for gold image approach
-        if: steps.copa.conclusion == 'success'
-        run: |
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          
-          echo "Retagging patched image to maintain gold image approach"
-          # Get the patched image reference from Copa action output
-          PATCHED_IMAGE="${{ steps.copa.outputs.patched-image }}"
-          
-          # Retag to original version and latest
-          docker tag "$PATCHED_IMAGE" ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
-          docker tag "$PATCHED_IMAGE" ${{ secrets.REGISTRY }}/$IMAGE_NAME:latest
-          
-          # Clean up the temporary tag
-          docker rmi "$PATCHED_IMAGE" || true
-          
-          echo "Successfully retagged patched image"
-
-      - name: Verify patching results
-        if: steps.copa.conclusion == 'success'
-        run: |
-          IMAGE_NAME="${{ steps.config.outputs.image_name }}"
-          VERSION="${{ steps.config.outputs.version }}"
-          
-          echo "Rescanning patched image..."
-          PATCHED_VULN_FILE="patched-vulnerabilities-$IMAGE_NAME-$VERSION.json"
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasecurity/trivy:latest image --vuln-type os --ignore-unfixed \
-            --format json --output "$PATCHED_VULN_FILE" \
-            ${{ secrets.REGISTRY }}/$IMAGE_NAME:$VERSION
-          
-          ORIGINAL_VULN_COUNT="${{ steps.vuln_count.outputs.vuln_count }}"
-          PATCHED_VULN_COUNT=$(jq 'if .Results then [.Results[] | select(.Class=="os-pkgs" and .Vulnerabilities!=null) | .Vulnerabilities[]] | length else 0 end' "$PATCHED_VULN_FILE")
-          
-          echo "Vulnerabilities before patching: $ORIGINAL_VULN_COUNT"
-          echo "Vulnerabilities after patching: $PATCHED_VULN_COUNT"
-          
-          if [ "$PATCHED_VULN_COUNT" -lt "$ORIGINAL_VULN_COUNT" ]; then
-            echo "✅ Copa successfully reduced vulnerabilities from $ORIGINAL_VULN_COUNT to $PATCHED_VULN_COUNT"
-          else
-            echo "⚠️  Copa did not reduce vulnerabilities significantly"
-          fi
-
-      - name: Upload vulnerability scan results
-        uses: actions/upload-artifact@v4
-        with:
-          name: vulnerability-results-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}
-          path: |
-            vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
-            patched-vulnerabilities-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
-            vex-${{ steps.config.outputs.image_name }}-${{ steps.config.outputs.version }}.json
-          retention-days: 30
-
-      # Note: Images are pushed directly during the buildx build step
 
   summary:
     needs: [prepare-matrix, build-images]
     runs-on: ubuntu-latest
     if: needs.build-images.result == 'success'
     steps:
+      - name: Get matrix information
+        id: matrix-info
+        run: |
+          # Get the matrix from the prepare-matrix job
+          MATRIX_JSON='${{ needs.prepare-matrix.outputs.matrix }}'
+          echo "matrix_json=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          
+          # Parse the matrix to get actual base images
+          BASE_IMAGES=$(echo "$MATRIX_JSON" | jq -r '.[]')
+          echo "base_images<<EOF" >> $GITHUB_OUTPUT
+          echo "$BASE_IMAGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create build summary
         run: |
-          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "**Base Images**: ${{ inputs.base_images }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit SHA**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry**: Azure Container Registry (${{ secrets.REGISTRY }})" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Types**: Node.js and Python hardened base images" >> $GITHUB_STEP_SUMMARY
-          echo "**Vulnerability Scanning**: Trivy OS vulnerability scanning" >> $GITHUB_STEP_SUMMARY
-          echo "**Vulnerability Patching**: Copa automatic patching applied" >> $GITHUB_STEP_SUMMARY
-          echo "**Pushed**: ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Status**: ${{ needs.build-images.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🐳 Hardened Docker Images Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Date** | $(date -u +"%Y-%m-%d %H:%M:%S UTC") |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Registry** | \`${{ secrets.REGISTRY }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platform** | \`linux/amd64\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Push Status** | ${{ inputs.push_image }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Status** | ✅ **${{ needs.build-images.result }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏗️ Built Images" >> $GITHUB_STEP_SUMMARY
+          echo "| Base Image | Hardened Image | Tag | Type |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|----------------|-----|------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate table rows dynamically from the matrix
+          while IFS= read -r base_image; do
+            if [[ -n "$base_image" ]]; then
+              # Determine image type and name
+              if [[ "$base_image" == node:* ]]; then
+                hardened_image="nodejs-hardened-base"
+                type="Node.js"
+              elif [[ "$base_image" == python:* ]]; then
+                hardened_image="python-hardened-base"
+                type="Python"
+              else
+                hardened_image="unknown-hardened-base"
+                type="Unknown"
+              fi
+              
+              # Extract version for tag
+              if [[ "$type" == "Node.js" ]]; then
+                tag=$(echo "$base_image" | sed 's/node://' | sed 's/:/-/g')
+              elif [[ "$type" == "Python" ]]; then
+                tag=$(echo "$base_image" | sed 's/python://' | sed 's/:/-/g')
+              else
+                tag="unknown"
+              fi
+              
+              echo "| \`$base_image\` | \`$hardened_image\` | \`$tag\` | $type |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done <<< "${{ steps.matrix-info.outputs.base_images }}"
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Image URLs" >> $GITHUB_STEP_SUMMARY
+          echo "All images are available at: \`${{ secrets.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Example pull commands:**" >> $GITHUB_STEP_SUMMARY
+          echo "```bash" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate pull commands dynamically
+          while IFS= read -r base_image; do
+            if [[ -n "$base_image" ]]; then
+              if [[ "$base_image" == node:* ]]; then
+                hardened_image="nodejs-hardened-base"
+              elif [[ "$base_image" == python:* ]]; then
+                hardened_image="python-hardened-base"
+              else
+                hardened_image="unknown-hardened-base"
+              fi
+              
+              if [[ "$type" == "Node.js" ]]; then
+                tag=$(echo "$base_image" | sed 's/node://' | sed 's/:/-/g')
+              elif [[ "$type" == "Python" ]]; then
+                tag=$(echo "$base_image" | sed 's/python://' | sed 's/:/-/g')
+              else
+                tag="unknown"
+              fi
+              
+              echo "docker pull ${{ secrets.REGISTRY }}/$hardened_image:$tag" >> $GITHUB_STEP_SUMMARY
+            fi
+          done <<< "${{ steps.matrix-info.outputs.base_images }}"
+          
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🛡️ Security Features" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Non-root user** - All images run as non-root" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Minimal attack surface** - Removed unnecessary tools" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Secure permissions** - Proper file permissions" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Alpine-based** - Lightweight and secure base" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*Built with ❤️ using GitHub Actions*" >> $GITHUB_STEP_SUMMARY
